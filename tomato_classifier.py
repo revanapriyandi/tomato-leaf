@@ -25,6 +25,7 @@ import seaborn as sns
 import tensorflow as tf
 import keras
 from keras import layers
+from PIL import Image
 
 from sklearn.metrics import (
     classification_report, confusion_matrix, accuracy_score,
@@ -340,7 +341,9 @@ def is_valid_image(file_path: str) -> bool:
     
     Validates by:
     1. Checking file extension is a valid image format
-    2. Attempting to decode the image using TensorFlow
+    2. Checking minimum file size (files < 100 bytes are likely corrupted)
+    3. Using PIL to verify image format and data integrity
+    4. Falls back to TensorFlow if PIL is not available
     
     Args:
         file_path: Path to the file to validate
@@ -361,10 +364,25 @@ def is_valid_image(file_path: str) -> bool:
     if not filename.lower().endswith(VALID_IMAGE_EXTENSIONS):
         return False
     
-    # Try to decode the image using TensorFlow
+    # Check minimum file size (files less than 100 bytes are likely corrupted)
+    if os.path.getsize(file_path) < 100:
+        return False
+    
+    # Try to validate using PIL (more tolerant than TensorFlow)
+    try:
+        with Image.open(file_path) as img:
+            # Verify the image format is valid
+            img.verify()
+        # Re-open to verify data can actually be loaded (verify() invalidates the image)
+        with Image.open(file_path) as img:
+            img.load()
+        return True
+    except Exception:
+        pass
+    
+    # Fallback to TensorFlow if PIL fails
     try:
         image_data = tf.io.read_file(file_path)
-        # decode_image automatically detects the format and channels
         _ = tf.io.decode_image(image_data)
         return True
     except Exception:
