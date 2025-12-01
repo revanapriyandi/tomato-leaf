@@ -62,6 +62,123 @@ MAX_CALIBRATION_CLASSES = 5
 # Whether to call plt.show() after saving plots (useful for Kaggle notebooks)
 SHOW_PLOTS = True
 
+
+def is_notebook_environment() -> bool:
+    """Detect if running in a Jupyter/Kaggle/Colab notebook environment.
+    
+    Returns:
+        True if running in a notebook environment, False otherwise.
+    """
+    try:
+        # Check if get_ipython exists and returns an interactive shell
+        shell = get_ipython().__class__.__name__
+        if shell == 'ZMQInteractiveShell':
+            return True  # Jupyter notebook or qtconsole
+        elif shell == 'TerminalInteractiveShell':
+            return False  # Terminal running IPython
+        else:
+            return False
+    except NameError:
+        pass  # get_ipython doesn't exist
+    
+    # Check for ipykernel in sys.modules
+    if 'ipykernel' in sys.modules:
+        return True
+    
+    # Check for google.colab in sys.modules (Colab-specific)
+    if 'google.colab' in sys.modules:
+        return True
+    
+    return False
+
+
+def get_default_dataset_path() -> str:
+    """Get the default dataset path, prioritizing Kaggle input paths.
+    
+    Returns:
+        Default dataset path string.
+    """
+    # Kaggle-specific paths (prioritized)
+    kaggle_paths = [
+        '/kaggle/input/tomato-dataset',
+        '/kaggle/input/tomato-leaf-disease-dataset',
+        '/kaggle/input/tomato',
+    ]
+    
+    for path in kaggle_paths:
+        if os.path.exists(path):
+            return path
+    
+    # Local development paths
+    if os.path.exists('train'):
+        return '.'
+    
+    # Default fallback
+    return '/kaggle/input/tomato-dataset'
+
+
+# Default configuration for notebook environments
+# Users can modify these values before calling run()
+DEFAULT_CONFIG = {
+    'dataset_path': None,  # Will be auto-detected if None
+    'epochs': 20,
+    'epochs_ft': 50,
+    'batch_size': 32,
+    'dry_run': False,
+    'use_mixed_precision': True,
+}
+
+
+def run(
+    dataset_path: Optional[str] = None,
+    epochs: int = 20,
+    epochs_ft: int = 50,
+    batch_size: int = 32,
+    dry_run: bool = False,
+    use_mixed_precision: bool = True
+) -> None:
+    """Run the tomato disease classification training pipeline.
+    
+    This is a user-friendly wrapper function designed for notebook environments
+    (Kaggle, Colab, Jupyter). Users can call this function with keyword arguments
+    instead of using command-line arguments.
+    
+    Example usage in a notebook:
+        from tomato_classifier import run
+        
+        # Run with default settings
+        run()
+        
+        # Run with custom settings
+        run(epochs=10, epochs_ft=20, dry_run=True)
+        
+        # Run with custom dataset path
+        run(dataset_path='/kaggle/input/my-dataset')
+    
+    Args:
+        dataset_path: Path to dataset directory. If None, auto-detects
+            from common Kaggle paths or current directory.
+        epochs: Number of epochs for feature extraction phase (default: 20).
+        epochs_ft: Number of epochs for fine-tuning phase (default: 50).
+        batch_size: Training batch size (default: 32).
+        dry_run: If True, run with 1 epoch for quick testing (default: False).
+        use_mixed_precision: Whether to use mixed precision training (default: True).
+    """
+    # Auto-detect dataset path if not provided
+    if dataset_path is None:
+        dataset_path = get_default_dataset_path()
+    
+    print(f"Dataset path: {dataset_path}")
+    
+    main(
+        dataset_path=dataset_path,
+        dry_run=dry_run,
+        epochs=epochs,
+        epochs_ft=epochs_ft,
+        batch_size=batch_size,
+        use_mixed_precision=use_mixed_precision
+    )
+
 # Colorblind-friendly palette (extended for more classes)
 COLORS = ['#0077BB', '#33BBEE', '#009988', '#EE7733', '#CC3311',
           '#EE3377', '#BBBBBB', '#AA4499', '#999933', '#44AA99',
@@ -2220,29 +2337,47 @@ def main(
 
 
 if __name__ == "__main__":
-    # Parse command line arguments
-    args = parse_arguments()
-    
-    # Determine dataset path
-    if args.dataset_path:
-        dataset_path = args.dataset_path
+    # Check if running in a notebook environment
+    if is_notebook_environment():
+        # In notebook environments, skip argparse and use defaults
+        # Users should call run() function directly with custom parameters
+        print("="*60)
+        print("🔔 NOTEBOOK ENVIRONMENT DETECTED")
+        print("="*60)
+        print("\nTo train the model, call the run() function:")
+        print("  from tomato_classifier import run")
+        print("  run()  # Use default settings")
+        print("")
+        print("Or customize training parameters:")
+        print("  run(")
+        print("      dataset_path='/kaggle/input/my-dataset',")
+        print("      epochs=10,")
+        print("      epochs_ft=20,")
+        print("      batch_size=32,")
+        print("      dry_run=False,")
+        print("      use_mixed_precision=True")
+        print("  )")
+        print("")
+        print("Default configuration:")
+        print(f"  {DEFAULT_CONFIG}")
+        print("="*60)
     else:
-        # Default paths for Kaggle and local
-        default_path = '/kaggle/input/tomato-dataset'
-        if not os.path.exists(default_path):
-            if os.path.exists('train'):
-                default_path = '.'
-            else:
-                default_path = '/kaggle/input/tomato-dataset'
-        dataset_path = default_path
-    
-    print(f"Dataset path: {dataset_path}")
-    
-    main(
-        dataset_path=dataset_path,
-        dry_run=args.dry_run,
-        epochs=args.epochs,
-        epochs_ft=args.epochs_ft,
-        batch_size=args.batch_size,
-        use_mixed_precision=not args.no_mixed_precision
-    )
+        # Command-line usage: parse arguments
+        args = parse_arguments()
+        
+        # Determine dataset path
+        if args.dataset_path:
+            dataset_path = args.dataset_path
+        else:
+            dataset_path = get_default_dataset_path()
+        
+        print(f"Dataset path: {dataset_path}")
+        
+        main(
+            dataset_path=dataset_path,
+            dry_run=args.dry_run,
+            epochs=args.epochs,
+            epochs_ft=args.epochs_ft,
+            batch_size=args.batch_size,
+            use_mixed_precision=not args.no_mixed_precision
+        )
