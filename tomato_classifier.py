@@ -15,6 +15,7 @@ import os
 import sys
 import time
 import csv
+import shutil
 from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass, field
 
@@ -363,8 +364,8 @@ def is_valid_image(file_path: str) -> bool:
     # Try to decode the image using TensorFlow
     try:
         image_data = tf.io.read_file(file_path)
-        # decode_image automatically detects the format
-        _ = tf.io.decode_image(image_data, channels=3)
+        # decode_image automatically detects the format and channels
+        _ = tf.io.decode_image(image_data)
         return True
     except Exception:
         return False
@@ -460,7 +461,8 @@ def validate_and_clean_dataset(
                         os.makedirs(dest_dir, exist_ok=True)
                         dest_path = os.path.join(dest_dir, filename)
                         try:
-                            os.rename(file_path, dest_path)
+                            # Use shutil.move for cross-filesystem compatibility
+                            shutil.move(file_path, dest_path)
                             result['removed_count'] += 1
                         except Exception as e:
                             print(f"  ⚠ Could not move {file_path}: {e}")
@@ -526,6 +528,8 @@ def create_datasets(dataset_path: str = '.', batch_size: int = BATCH_SIZE, valid
         validation_result = validate_and_clean_dataset(dataset_path)
         if validation_result['invalid_count'] > 0:
             print(f"⚠ Found {validation_result['invalid_count']} invalid files that may cause loading errors.")
+            print("  To fix, run: validate_and_clean_dataset(dataset_path, remove_invalid=True)")
+            print("  Or to move files: validate_and_clean_dataset(dataset_path, move_to_folder='invalid_images')")
 
     load_params = dict(
         seed=42,
