@@ -346,7 +346,7 @@ def is_valid_image(file_path: str) -> bool:
     1. Checking file extension is a valid image format
     2. Checking minimum file size (files < MIN_IMAGE_FILE_SIZE bytes are likely corrupted)
     3. Using PIL to verify image format and data integrity
-    4. Falls back to TensorFlow if PIL is not available
+    4. Falls back to TensorFlow if PIL validation fails
     
     Args:
         file_path: Path to the file to validate
@@ -378,6 +378,7 @@ def is_valid_image(file_path: str) -> bool:
             img.load()
         return True
     except OSError:
+        # PIL failed to open/load the image, try TensorFlow fallback
         pass
     
     # Fallback to TensorFlow if PIL fails
