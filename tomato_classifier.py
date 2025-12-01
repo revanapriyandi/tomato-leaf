@@ -16,6 +16,7 @@ import sys
 import time
 import csv
 import shutil
+import functools
 from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass, field
 
@@ -62,6 +63,10 @@ MAX_CALIBRATION_CLASSES = 5
 
 # Whether to call plt.show() after saving plots (useful for Kaggle notebooks)
 SHOW_PLOTS = True
+
+# Dataset loading configuration
+SHUFFLE_BUFFER_SIZE = 10000  # Max buffer size for shuffling (limits memory usage)
+TRAIN_VAL_SPLIT_RATIO = 0.9  # Ratio for train/validation split when no val dir exists
 
 
 def get_default_dataset_path() -> str:
@@ -724,13 +729,13 @@ def create_dataset_from_paths(
     # Shuffle before mapping (more efficient)
     # Use a reasonable buffer size to avoid excessive memory usage for large datasets
     if shuffle:
-        buffer_size = min(10000, len(file_paths))
+        buffer_size = min(SHUFFLE_BUFFER_SIZE, len(file_paths))
         dataset = dataset.shuffle(buffer_size=buffer_size, seed=seed, reshuffle_each_iteration=True)
     
-    # Map the processing function
-    # Use a lambda to capture num_classes
+    # Map the processing function using functools.partial for better serialization
+    process_fn = functools.partial(process_path, num_classes=num_classes)
     dataset = dataset.map(
-        lambda fp, lbl: process_path(fp, lbl, num_classes),
+        process_fn,
         num_parallel_calls=tf.data.AUTOTUNE
     )
     
@@ -807,13 +812,14 @@ def create_datasets(dataset_path: str = '.', batch_size: int = BATCH_SIZE, valid
             batch_size=batch_size, shuffle=False
         )
     else:
-        # Split training data for validation (10%)
-        print("\n  No validation directory found, splitting from train (10%)...")
+        # Split training data for validation
+        val_split_pct = int((1 - TRAIN_VAL_SPLIT_RATIO) * 100)
+        print(f"\n  No validation directory found, splitting from train ({val_split_pct}%)...")
         
         # Shuffle data before splitting to ensure random split
         np.random.seed(seed)
         indices = np.random.permutation(len(train_paths))
-        split_idx = int(len(indices) * 0.9)
+        split_idx = int(len(indices) * TRAIN_VAL_SPLIT_RATIO)
         
         train_indices = indices[:split_idx]
         val_indices = indices[split_idx:]
