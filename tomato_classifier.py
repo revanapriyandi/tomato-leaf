@@ -338,12 +338,11 @@ def check_dataset_path(dataset_path: str) -> Tuple[bool, bool]:
 VALID_IMAGE_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp')
 
 
-def is_valid_image_file(filepath: str) -> bool:
+def has_valid_image_header(filepath: str) -> bool:
     """Check if file has valid image header (magic bytes).
     
-    This function validates images by checking their magic bytes (file signatures)
-    without fully loading the image, which is faster and more robust for initial
-    validation during dataset scanning.
+    This is a fast preliminary check that validates magic bytes before
+    attempting full TensorFlow decoding.
     
     Supported formats:
     - JPEG (FF D8)
@@ -389,15 +388,54 @@ def is_valid_image_file(filepath: str) -> bool:
         return False
 
 
+def is_valid_image_file(filepath: str) -> Tuple[bool, str]:
+    """Validate image file using TensorFlow decoding.
+    
+    This function performs comprehensive image validation by:
+    1. First checking magic bytes (fast preliminary check)
+    2. Then attempting to decode the image with TensorFlow
+    
+    This ensures that images with correct headers but corrupted content
+    are detected and excluded during dataset scanning, preventing crashes
+    during training.
+    
+    Args:
+        filepath: Path to the file to validate
+        
+    Returns:
+        Tuple of (is_valid, reason) where:
+        - is_valid: True if image can be decoded successfully
+        - reason: Description of why the image was rejected (empty string if valid)
+    """
+    # Fast preliminary check using magic bytes
+    if not has_valid_image_header(filepath):
+        return False, "invalid or missing image header"
+    
+    # Full TensorFlow-based validation by attempting to decode the image
+    try:
+        img_bytes = tf.io.read_file(filepath)
+        # Use decode_image which handles JPEG, PNG, GIF, BMP
+        # expand_animations=False ensures animated GIFs return single frame
+        img = tf.io.decode_image(img_bytes, channels=3, expand_animations=False)
+        # Verify we got valid tensor with expected shape
+        if img.shape.rank != 3 or img.shape[2] != 3:
+            return False, "decoded image has unexpected shape"
+        return True, ""
+    except tf.errors.InvalidArgumentError as e:
+        return False, f"TensorFlow decode error: {str(e)[:100]}"
+    except Exception as e:
+        return False, f"unexpected error: {str(e)[:100]}"
+
+
 def get_image_files_and_labels(
     data_dir: str,
     class_names: Optional[List[str]] = None
 ) -> Tuple[List[str], List[int], List[str], Dict[str, int]]:
     """Scan directory for valid images and return file paths with labels.
     
-    This function scans the data directory for valid images using magic bytes
+    This function scans the data directory for valid images using TensorFlow-based
     validation. It filters out corrupted or invalid files and reports any
-    skipped files.
+    skipped files with detailed reasons.
     
     Args:
         data_dir: Path to data directory (e.g., 'train', 'val', or 'test')
@@ -427,7 +465,7 @@ def get_image_files_and_labels(
     file_paths = []
     labels = []
     class_counts = {name: 0 for name in class_names}
-    skipped_files = []
+    skipped_files: List[Tuple[str, str]] = []  # (filepath, reason)
     
     for class_idx, class_name in enumerate(class_names):
         class_dir = os.path.join(data_dir, class_name)
@@ -445,24 +483,24 @@ def get_image_files_and_labels(
             
             file_path = os.path.join(class_dir, filename)
             
-            # Validate using magic bytes
-            if is_valid_image_file(file_path):
+            # Validate using TensorFlow-based decoding
+            is_valid, reason = is_valid_image_file(file_path)
+            if is_valid:
                 file_paths.append(file_path)
                 labels.append(class_idx)
                 class_counts[class_name] += 1
             else:
-                skipped_files.append(file_path)
+                skipped_files.append((file_path, reason))
     
-    # Report skipped files
+    # Report skipped files with detailed logging
     if skipped_files:
-        print(f"  ⚠ Skipped {len(skipped_files)} invalid/corrupted files in {os.path.basename(data_dir)}")
-        if len(skipped_files) <= 5:
-            for f in skipped_files:
-                print(f"    - {os.path.basename(f)}")
-        else:
-            for f in skipped_files[:3]:
-                print(f"    - {os.path.basename(f)}")
-            print(f"    ... and {len(skipped_files) - 3} more")
+        print(f"  ⚠ Skipped {len(skipped_files)} invalid/corrupted files in {os.path.basename(data_dir)}:")
+        # Show up to 5 files with their reasons
+        files_to_show = min(5, len(skipped_files))
+        for filepath, reason in skipped_files[:files_to_show]:
+            print(f"    - {os.path.basename(filepath)}: {reason}")
+        if len(skipped_files) > files_to_show:
+            print(f"    ... and {len(skipped_files) - files_to_show} more")
     
     return file_paths, labels, class_names, class_counts
 
@@ -510,6 +548,10 @@ def create_dataset_from_paths(
     validated image file paths and their corresponding labels. It handles
     batching, caching, prefetching, and optional shuffling.
     
+    The dataset pipeline includes ignore_errors() to gracefully skip any
+    remaining corrupted images that might have passed initial validation,
+    ensuring training continues without crashes.
+    
     Args:
         file_paths: List of validated image file paths
         labels: List of integer labels corresponding to each file
@@ -543,6 +585,11 @@ def create_dataset_from_paths(
         num_parallel_calls=tf.data.AUTOTUNE
     )
     
+    # Add ignore_errors() to gracefully skip any corrupted images that might
+    # have passed initial validation. This ensures training continues without
+    # crashing if any edge cases slip through the validation.
+    dataset = dataset.ignore_errors(log_warning=True)
+    
     # Batch and optimize
     dataset = dataset.batch(batch_size)
     dataset = dataset.cache()
@@ -555,8 +602,14 @@ def create_datasets(dataset_path: str = '.', batch_size: int = BATCH_SIZE, seed:
     """Create train, validation, and test datasets using robust image loading.
     
     This function uses a robust data loading approach that validates each image
-    using magic bytes before loading. This prevents crashes from corrupted or
-    invalid image files in the dataset.
+    using TensorFlow-based decoding before loading. This prevents crashes from
+    corrupted or invalid image files in the dataset.
+    
+    The validation process:
+    1. Checks magic bytes for quick preliminary filtering
+    2. Attempts TensorFlow decoding to ensure image content is valid
+    3. Logs detailed information about any skipped files
+    4. Dataset pipeline includes ignore_errors() for additional safety
     
     Args:
         dataset_path: Path to the dataset root directory
