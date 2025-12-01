@@ -379,8 +379,8 @@ def is_valid_image_file(filepath: str) -> bool:
             # BMP (42 4D)
             if header.startswith(b'BM'):
                 return True
-            # GIF (47 49 46 38)
-            if header.startswith(b'GIF8'):
+            # GIF (GIF87a or GIF89a - both start with 'GIF8')
+            if header.startswith(b'GIF87a') or header.startswith(b'GIF89a'):
                 return True
             # WebP (RIFF....WEBP)
             if header.startswith(b'RIFF') and header[8:12] == b'WEBP':
@@ -722,8 +722,10 @@ def create_dataset_from_paths(
     dataset = tf.data.Dataset.from_tensor_slices((file_paths, labels))
     
     # Shuffle before mapping (more efficient)
+    # Use a reasonable buffer size to avoid excessive memory usage for large datasets
     if shuffle:
-        dataset = dataset.shuffle(buffer_size=len(file_paths), seed=seed, reshuffle_each_iteration=True)
+        buffer_size = min(10000, len(file_paths))
+        dataset = dataset.shuffle(buffer_size=buffer_size, seed=seed, reshuffle_each_iteration=True)
     
     # Map the processing function
     # Use a lambda to capture num_classes
@@ -740,7 +742,7 @@ def create_dataset_from_paths(
     return dataset
 
 
-def create_datasets(dataset_path: str = '.', batch_size: int = BATCH_SIZE, validate: bool = True) -> Tuple[tf.data.Dataset, tf.data.Dataset, tf.data.Dataset, List[str], Dict[str, int]]:
+def create_datasets(dataset_path: str = '.', batch_size: int = BATCH_SIZE, validate: bool = True, seed: int = 42) -> Tuple[tf.data.Dataset, tf.data.Dataset, tf.data.Dataset, List[str], Dict[str, int]]:
     """Create train, validation, and test datasets using robust image loading.
     
     This function uses a robust data loading approach that validates each image
@@ -753,6 +755,7 @@ def create_datasets(dataset_path: str = '.', batch_size: int = BATCH_SIZE, valid
         validate: If True, run full validation and report on invalid images 
             before loading (default: True). Note: Basic validation via magic
             bytes is always performed during file scanning.
+        seed: Random seed for shuffling and splitting (default: 42)
         
     Returns:
         Tuple of (train_ds, val_ds, test_ds, class_names, class_counts)
@@ -795,7 +798,7 @@ def create_datasets(dataset_path: str = '.', batch_size: int = BATCH_SIZE, valid
         # Create training dataset
         train_ds = create_dataset_from_paths(
             train_paths, train_labels, num_classes, 
-            batch_size=batch_size, shuffle=True, seed=42
+            batch_size=batch_size, shuffle=True, seed=seed
         )
         
         # Create validation dataset
@@ -808,7 +811,7 @@ def create_datasets(dataset_path: str = '.', batch_size: int = BATCH_SIZE, valid
         print("\n  No validation directory found, splitting from train (10%)...")
         
         # Shuffle data before splitting to ensure random split
-        np.random.seed(42)
+        np.random.seed(seed)
         indices = np.random.permutation(len(train_paths))
         split_idx = int(len(indices) * 0.9)
         
@@ -828,7 +831,7 @@ def create_datasets(dataset_path: str = '.', batch_size: int = BATCH_SIZE, valid
         # Create training dataset
         train_ds = create_dataset_from_paths(
             train_paths_split, train_labels_split, num_classes,
-            batch_size=batch_size, shuffle=True, seed=42
+            batch_size=batch_size, shuffle=True, seed=seed
         )
         
         # Create validation dataset
