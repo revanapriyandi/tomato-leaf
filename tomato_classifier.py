@@ -329,17 +329,203 @@ def check_dataset_path(dataset_path: str) -> Tuple[bool, bool]:
 # ============================================
 # DATASETS
 # ============================================
-def create_datasets(dataset_path: str = '.', batch_size: int = BATCH_SIZE) -> Tuple[tf.data.Dataset, tf.data.Dataset, tf.data.Dataset, List[str], Dict[str, int]]:
+
+# Valid image extensions supported by TensorFlow
+VALID_IMAGE_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp')
+
+
+def is_valid_image(file_path: str) -> bool:
+    """Check if a file is a valid image that can be decoded.
+    
+    Validates by:
+    1. Checking file extension is a valid image format
+    2. Attempting to decode the image using TensorFlow
+    
+    Args:
+        file_path: Path to the file to validate
+        
+    Returns:
+        True if file is a valid, decodable image, False otherwise
+    """
+    # Check if file exists
+    if not os.path.isfile(file_path):
+        return False
+    
+    # Get filename and check it's not a hidden file
+    filename = os.path.basename(file_path)
+    if filename.startswith('.'):
+        return False
+    
+    # Check file extension
+    if not filename.lower().endswith(VALID_IMAGE_EXTENSIONS):
+        return False
+    
+    # Try to decode the image using TensorFlow
+    try:
+        image_data = tf.io.read_file(file_path)
+        # decode_image automatically detects the format
+        _ = tf.io.decode_image(image_data, channels=3)
+        return True
+    except Exception:
+        return False
+
+
+def validate_and_clean_dataset(
+    dataset_path: str,
+    remove_invalid: bool = False,
+    move_to_folder: Optional[str] = None
+) -> Dict[str, Any]:
+    """Validate and optionally clean a dataset by identifying invalid images.
+    
+    Scans all subdirectories (train, val, test) for invalid or corrupted images.
+    Can optionally remove them or move them to a separate folder.
+    
+    Args:
+        dataset_path: Root path to the dataset directory
+        remove_invalid: If True, delete invalid files (default: False)
+        move_to_folder: If provided, move invalid files to this folder instead of deleting
+        
+    Returns:
+        Dictionary containing:
+        - 'total_scanned': Total number of files scanned
+        - 'valid_count': Number of valid images
+        - 'invalid_count': Number of invalid files
+        - 'invalid_files': List of invalid file paths
+        - 'removed_count': Number of files removed/moved
+        - 'details': Dict with per-directory breakdown
+    """
+    print(f"\n{'='*60}")
+    print("VALIDATING DATASET")
+    print(f"{'='*60}")
+    print(f"Dataset path: {dataset_path}")
+    
+    # Directories to scan
+    subdirs = ['train', 'val', 'test']
+    
+    result = {
+        'total_scanned': 0,
+        'valid_count': 0,
+        'invalid_count': 0,
+        'invalid_files': [],
+        'removed_count': 0,
+        'details': {}
+    }
+    
+    # Create move folder if specified
+    if move_to_folder and not os.path.exists(move_to_folder):
+        os.makedirs(move_to_folder, exist_ok=True)
+    
+    for subdir in subdirs:
+        subdir_path = os.path.join(dataset_path, subdir)
+        if not os.path.exists(subdir_path):
+            continue
+            
+        subdir_stats = {
+            'scanned': 0,
+            'valid': 0,
+            'invalid': 0,
+            'invalid_files': []
+        }
+        
+        # Iterate through class directories
+        for class_name in os.listdir(subdir_path):
+            class_path = os.path.join(subdir_path, class_name)
+            if not os.path.isdir(class_path):
+                continue
+            
+            # Scan all files in class directory
+            for filename in os.listdir(class_path):
+                file_path = os.path.join(class_path, filename)
+                
+                # Skip directories
+                if os.path.isdir(file_path):
+                    continue
+                
+                subdir_stats['scanned'] += 1
+                result['total_scanned'] += 1
+                
+                if is_valid_image(file_path):
+                    subdir_stats['valid'] += 1
+                    result['valid_count'] += 1
+                else:
+                    subdir_stats['invalid'] += 1
+                    result['invalid_count'] += 1
+                    subdir_stats['invalid_files'].append(file_path)
+                    result['invalid_files'].append(file_path)
+                    
+                    # Handle invalid file
+                    if move_to_folder:
+                        # Create subdirectory structure in move folder
+                        dest_dir = os.path.join(move_to_folder, subdir, class_name)
+                        os.makedirs(dest_dir, exist_ok=True)
+                        dest_path = os.path.join(dest_dir, filename)
+                        try:
+                            os.rename(file_path, dest_path)
+                            result['removed_count'] += 1
+                        except Exception as e:
+                            print(f"  ⚠ Could not move {file_path}: {e}")
+                    elif remove_invalid:
+                        try:
+                            os.remove(file_path)
+                            result['removed_count'] += 1
+                        except Exception as e:
+                            print(f"  ⚠ Could not remove {file_path}: {e}")
+        
+        result['details'][subdir] = subdir_stats
+        
+        # Print summary for this subdirectory
+        if subdir_stats['scanned'] > 0:
+            print(f"\n  {subdir.upper()}:")
+            print(f"    Scanned: {subdir_stats['scanned']}")
+            print(f"    Valid: {subdir_stats['valid']}")
+            print(f"    Invalid: {subdir_stats['invalid']}")
+            if subdir_stats['invalid_files']:
+                print(f"    Invalid files:")
+                for f in subdir_stats['invalid_files'][:5]:  # Show first 5
+                    print(f"      - {os.path.basename(f)}")
+                if len(subdir_stats['invalid_files']) > 5:
+                    print(f"      ... and {len(subdir_stats['invalid_files']) - 5} more")
+    
+    # Print overall summary
+    print(f"\n{'='*60}")
+    print("VALIDATION SUMMARY")
+    print(f"{'='*60}")
+    print(f"Total files scanned: {result['total_scanned']}")
+    print(f"Valid images: {result['valid_count']}")
+    print(f"Invalid files: {result['invalid_count']}")
+    if result['removed_count'] > 0:
+        action = "moved" if move_to_folder else "removed"
+        print(f"Files {action}: {result['removed_count']}")
+    
+    if result['invalid_count'] > 0 and not remove_invalid and not move_to_folder:
+        print("\nℹ To clean the dataset, call with remove_invalid=True or move_to_folder='path'")
+    
+    if result['invalid_count'] == 0:
+        print("✓ All images are valid!")
+    
+    print(f"{'='*60}\n")
+    
+    return result
+
+
+def create_datasets(dataset_path: str = '.', batch_size: int = BATCH_SIZE, validate: bool = True) -> Tuple[tf.data.Dataset, tf.data.Dataset, tf.data.Dataset, List[str], Dict[str, int]]:
     """Create train, validation, and test datasets.
     
     Args:
         dataset_path: Path to the dataset root directory
         batch_size: Batch size for datasets
+        validate: If True, validate and report on invalid images before loading (default: True)
         
     Returns:
         Tuple of (train_ds, val_ds, test_ds, class_names, class_counts)
     """
     _, has_val = check_dataset_path(dataset_path)
+    
+    # Validate dataset before loading
+    if validate:
+        validation_result = validate_and_clean_dataset(dataset_path)
+        if validation_result['invalid_count'] > 0:
+            print(f"⚠ Found {validation_result['invalid_count']} invalid files that may cause loading errors.")
 
     load_params = dict(
         seed=42,
@@ -416,6 +602,8 @@ def create_datasets(dataset_path: str = '.', batch_size: int = BATCH_SIZE) -> Tu
 def count_class_samples(data_dir: str, class_names: List[str]) -> Dict[str, int]:
     """Count samples per class in a directory.
     
+    Only counts valid image files (not hidden files like .DS_Store).
+    
     Args:
         data_dir: Path to data directory
         class_names: List of class names
@@ -427,9 +615,10 @@ def count_class_samples(data_dir: str, class_names: List[str]) -> Dict[str, int]
     for class_name in class_names:
         class_dir = os.path.join(data_dir, class_name)
         if os.path.exists(class_dir):
-            # Count image files
+            # Count image files, excluding hidden files
             count = len([f for f in os.listdir(class_dir) 
-                        if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.gif'))])
+                        if not f.startswith('.') and 
+                        f.lower().endswith(VALID_IMAGE_EXTENSIONS)])
             class_counts[class_name] = count
         else:
             class_counts[class_name] = 0
@@ -451,8 +640,10 @@ def get_class_weights(train_dir: str, class_names: List[str]) -> Dict[int, float
     for class_idx, class_name in enumerate(class_names):
         class_dir = os.path.join(train_dir, class_name)
         if os.path.exists(class_dir):
+            # Count valid image files, excluding hidden files
             count = len([f for f in os.listdir(class_dir) 
-                        if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.gif'))])
+                        if not f.startswith('.') and 
+                        f.lower().endswith(VALID_IMAGE_EXTENSIONS)])
             labels.extend([class_idx] * count)
     
     if len(labels) == 0:
