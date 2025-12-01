@@ -1,0 +1,20 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Model outputs
+*.keras
+*.h5
+*.tflite
+outputs/
+
+# Plots
+*.png
+
+# Best model checkpoints
+best_model_*.keras
+
+# TensorFlow/Keras temp files
+.tensorflow/
+logs/

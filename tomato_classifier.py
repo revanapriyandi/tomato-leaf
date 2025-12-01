@@ -117,9 +117,13 @@ def create_datasets(dataset_path='.'):
     )
 
     class_names = train_ds.class_names
+    if len(class_names) == 0:
+        raise ValueError("No classes found in training directory!")
     print(f"Classes detected ({len(class_names)}): {class_names}")
 
     # Performance optimization (Prefetching)
+    # NOTE: .cache() without argument caches to memory, which can cause OOM for large datasets.
+    # For large datasets, consider using .cache(filename) to cache to disk instead.
     AUTOTUNE = tf.data.AUTOTUNE
     train_ds = train_ds.cache().prefetch(buffer_size=AUTOTUNE)
     val_ds = val_ds.cache().prefetch(buffer_size=AUTOTUNE)
@@ -130,7 +134,7 @@ def create_datasets(dataset_path='.'):
 # ============================================
 # MODEL BUILDING
 # ============================================
-def build_model(num_classes):
+def build_model(num_classes: int) -> keras.Model:
     """Build DenseNet121 with custom head and augmentation"""
 
     # Data Augmentation (Part of the model)
@@ -147,6 +151,10 @@ def build_model(num_classes):
 
     # Apply augmentation only during training
     x = data_augmentation(inputs)
+
+    # Clip values to 0-255 range after augmentation (e.g., RandomBrightness can produce out-of-range values)
+    # preprocess_input expects values in 0-255 range
+    x = tf.clip_by_value(x, 0, 255)
 
     # Preprocess input (DenseNet expects specific scaling)
     # keras.applications.densenet.preprocess_input handles 0-255 inputs
@@ -183,7 +191,7 @@ def build_model(num_classes):
 # ============================================
 # TRAINING
 # ============================================
-def train_model(model, train_ds, val_ds, epochs=20, lr=0.001, phase='feature_extraction'):
+def train_model(model: keras.Model, train_ds: tf.data.Dataset, val_ds: tf.data.Dataset, epochs: int = 20, lr: float = 0.001, phase: str = 'feature_extraction'):
     """Train model with callbacks"""
 
     checkpoint_path = f'best_model_{phase}.keras'
@@ -241,7 +249,7 @@ def train_model(model, train_ds, val_ds, epochs=20, lr=0.001, phase='feature_ext
 # ============================================
 # EVALUATION & VISUALIZATION
 # ============================================
-def evaluate_model(model, test_ds, class_names):
+def evaluate_model(model: keras.Model, test_ds: tf.data.Dataset, class_names: list):
     """Comprehensive model evaluation"""
 
     print(f"\n{'='*60}")
@@ -305,6 +313,7 @@ def plot_training_history(history, phase='training'):
     plt.tight_layout()
     filename = f'training_history_{phase}.png'
     plt.savefig(filename, dpi=300, bbox_inches='tight')
+    plt.close()
     print(f"✓ Saved: {filename}")
 
 def plot_confusion_matrix(cm, class_names):
@@ -335,6 +344,7 @@ def plot_confusion_matrix(cm, class_names):
     plt.tight_layout()
     filename = 'confusion_matrix.png'
     plt.savefig(filename, dpi=300, bbox_inches='tight')
+    plt.close()
     print(f"✓ Saved: {filename}")
 
 def plot_per_class_metrics(y_true, y_pred_classes, class_names):
@@ -365,6 +375,7 @@ def plot_per_class_metrics(y_true, y_pred_classes, class_names):
     plt.tight_layout()
     filename = 'per_class_metrics.png'
     plt.savefig(filename, dpi=300, bbox_inches='tight')
+    plt.close()
     print(f"✓ Saved: {filename}")
 
 def plot_prediction_distribution(y_pred):
@@ -401,6 +412,7 @@ def plot_prediction_distribution(y_pred):
     plt.tight_layout()
     filename = 'confidence_distribution.png'
     plt.savefig(filename, dpi=300, bbox_inches='tight')
+    plt.close()
     print(f"✓ Saved: {filename}")
 
 def plot_model_architecture(model, filename='model_architecture.png'):
@@ -500,6 +512,10 @@ def main(dataset_path='.', dry_run=False):
     print("Keras 3 Implementation")
     print("="*60 + "\n")
 
+    # Check GPU availability
+    gpus = tf.config.list_physical_devices('GPU')
+    print(f"GPU Available: {len(gpus) > 0} ({gpus})")
+
     # Create output directory
     os.makedirs('outputs', exist_ok=True)
 
@@ -531,13 +547,12 @@ def main(dataset_path='.', dry_run=False):
     print("\nSTEP 4: Phase 2 - Fine-Tuning...")
 
     # Unfreeze the base model
-    # We find the DenseNet121 layer (it's likely the 3rd layer after input and augmentation)
-    # Better to find by name or instance check
+    # We find the DenseNet121 layer by name to avoid matching the augmentation Sequential layer
     base_model = None
     for layer in model.layers:
-        if isinstance(layer, keras.Model) or layer.name == 'densenet121':
-             base_model = layer
-             break
+        if layer.name == 'densenet121':
+            base_model = layer
+            break
 
     if base_model:
         base_model.trainable = True
