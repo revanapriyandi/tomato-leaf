@@ -658,16 +658,19 @@ def create_datasets(dataset_path: str = '.', batch_size: int = BATCH_SIZE, seed:
 
 
 def get_class_weights(class_counts: Dict[str, int], class_names: List[str]) -> Dict[int, float]:
-    """Compute class weights for imbalanced datasets from class counts.
+    """Compute class weights for imbalanced datasets from validated class counts.
+    
+    Uses the class counts from validated image scanning to compute balanced
+    class weights for training on imbalanced datasets.
     
     Args:
-        class_counts: Dictionary mapping class names to sample counts
+        class_counts: Dictionary mapping class names to validated sample counts
         class_names: List of class names (in order)
         
     Returns:
         Dictionary mapping class indices to weights
     """
-    # Build labels list from class counts
+    # Build labels list from validated class counts
     labels = []
     for class_idx, class_name in enumerate(class_names):
         count = class_counts.get(class_name, 0)
