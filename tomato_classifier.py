@@ -191,7 +191,7 @@ def build_model(num_classes: int) -> keras.Model:
 # ============================================
 # TRAINING
 # ============================================
-def train_model(model: keras.Model, train_ds, val_ds, epochs: int = 20, lr: float = 0.001, phase: str = 'feature_extraction'):
+def train_model(model: keras.Model, train_ds: tf.data.Dataset, val_ds: tf.data.Dataset, epochs: int = 20, lr: float = 0.001, phase: str = 'feature_extraction'):
     """Train model with callbacks"""
 
     checkpoint_path = f'best_model_{phase}.keras'
@@ -249,7 +249,7 @@ def train_model(model: keras.Model, train_ds, val_ds, epochs: int = 20, lr: floa
 # ============================================
 # EVALUATION & VISUALIZATION
 # ============================================
-def evaluate_model(model: keras.Model, test_ds, class_names: list):
+def evaluate_model(model: keras.Model, test_ds: tf.data.Dataset, class_names: list):
     """Comprehensive model evaluation"""
 
     print(f"\n{'='*60}")
