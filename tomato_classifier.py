@@ -13,7 +13,7 @@ Features:
 
 import os
 import sys
-import argparse
+
 import time
 import csv
 from typing import Dict, List, Tuple, Optional, Any
@@ -330,103 +330,6 @@ def check_dataset_path(dataset_path: str) -> Tuple[bool, bool]:
 # ============================================
 # DATASETS
 # ============================================
-def filter_corrupt_images(dataset_path: str) -> int:
-    """
-    Scan and identify corrupt or invalid image files in the dataset.
-    
-    This function validates all image files in the dataset by checking:
-    1. File extension (must be a valid image extension)
-    2. Image header (must match the extension's expected format)
-    
-    TensorFlow's image_dataset_from_directory requires the image format
-    to match the file content. Files with mismatched extensions (e.g., 
-    WebP files saved as .jpg) will cause InvalidArgumentError.
-    
-    Args:
-        dataset_path: Path to root dataset directory containing train/val/test subdirs
-        
-    Returns:
-        Number of invalid/corrupt files found
-    """
-    corrupt_count = 0
-    valid_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp'}
-    
-    # Image format signatures (magic bytes)
-    image_signatures = [
-        (b'\xff\xd8\xff', 'jpeg'),           # JPEG
-        (b'\x89PNG\r\n\x1a\n', 'png'),       # PNG
-        (b'GIF87a', 'gif'),                   # GIF87a
-        (b'GIF89a', 'gif',),                  # GIF89a
-        (b'BM', 'bmp'),                       # BMP
-    ]
-    
-    # Mapping of extensions to expected formats
-    ext_to_format = {
-        '.jpg': 'jpeg',
-        '.jpeg': 'jpeg',
-        '.png': 'png',
-        '.gif': 'gif',
-        '.bmp': 'bmp',
-    }
-    
-    def detect_image_format(filepath: str) -> Optional[str]:
-        """Detect image format from file header."""
-        try:
-            with open(filepath, 'rb') as f:
-                header = f.read(16)
-                
-            if len(header) < 2:
-                return None
-            
-            # Check for WebP: RIFF....WEBP format
-            if header[:4] == b'RIFF' and len(header) >= 12 and header[8:12] == b'WEBP':
-                return 'webp'
-                
-            for signature, format_name in image_signatures:
-                if header.startswith(signature):
-                    return format_name
-            return None
-        except (IOError, OSError, PermissionError):
-            return None
-    
-    for split in ['train', 'val', 'test']:
-        split_path = os.path.join(dataset_path, split)
-        if not os.path.exists(split_path):
-            continue
-            
-        for class_name in os.listdir(split_path):
-            class_path = os.path.join(split_path, class_name)
-            if not os.path.isdir(class_path):
-                continue
-                
-            for filename in os.listdir(class_path):
-                filepath = os.path.join(class_path, filename)
-                
-                # Skip non-files
-                if not os.path.isfile(filepath):
-                    continue
-                
-                # Check extension
-                ext = os.path.splitext(filename)[1].lower()
-                if ext not in valid_extensions:
-                    print(f"  ⚠ Invalid extension: {filepath}")
-                    corrupt_count += 1
-                    continue
-                
-                # Detect actual format and compare with extension
-                actual_format = detect_image_format(filepath)
-                expected_format = ext_to_format.get(ext)
-                
-                if actual_format is None:
-                    print(f"  ⚠ Corrupt/unreadable image: {filepath}")
-                    corrupt_count += 1
-                elif actual_format != expected_format:
-                    print(f"  ⚠ Format mismatch: {filepath} (extension: {ext}, actual: {actual_format})")
-                    corrupt_count += 1
-    
-    return corrupt_count
-
-
 def create_datasets(dataset_path: str = '.', batch_size: int = BATCH_SIZE) -> Tuple[tf.data.Dataset, tf.data.Dataset, tf.data.Dataset, List[str], Dict[str, int]]:
     """Create train, validation, and test datasets.
     
@@ -438,14 +341,6 @@ def create_datasets(dataset_path: str = '.', batch_size: int = BATCH_SIZE) -> Tu
         Tuple of (train_ds, val_ds, test_ds, class_names, class_counts)
     """
     _, has_val = check_dataset_path(dataset_path)
-
-    # Filter and validate images before loading
-    print("\nScanning for corrupt/invalid images...")
-    corrupt_count = filter_corrupt_images(dataset_path)
-    if corrupt_count > 0:
-        print(f"⚠ Found {corrupt_count} invalid files. Consider removing them.")
-    else:
-        print("✓ All images validated successfully")
 
     load_params = dict(
         seed=42,
@@ -2028,66 +1923,6 @@ def save_model_summary_txt(
         f.write("\n".join(string_buffer))
     
     print(f"✓ Saved: {filepath}")
-
-
-def parse_arguments() -> argparse.Namespace:
-    """Parse command line arguments.
-    
-    Returns:
-        Parsed arguments namespace
-    """
-    parser = argparse.ArgumentParser(
-        description='Tomato Disease Classification Training Pipeline',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python tomato_classifier.py --dataset-path /path/to/dataset
-  python tomato_classifier.py --epochs 50 --batch-size 64
-  python tomato_classifier.py --dry-run  # Quick test with 1 epoch
-        """
-    )
-    
-    parser.add_argument(
-        '--dataset-path',
-        type=str,
-        default=None,
-        help='Path to dataset directory (default: /kaggle/input/tomato-dataset or .)'
-    )
-    
-    parser.add_argument(
-        '--epochs',
-        type=int,
-        default=20,
-        help='Number of epochs for feature extraction (default: 20)'
-    )
-    
-    parser.add_argument(
-        '--epochs-ft',
-        type=int,
-        default=50,
-        help='Number of epochs for fine-tuning (default: 50)'
-    )
-    
-    parser.add_argument(
-        '--batch-size',
-        type=int,
-        default=32,
-        help='Batch size (default: 32)'
-    )
-    
-    parser.add_argument(
-        '--dry-run',
-        action='store_true',
-        help='Run with 1 epoch for quick testing'
-    )
-    
-    parser.add_argument(
-        '--no-mixed-precision',
-        action='store_true',
-        help='Disable mixed precision training'
-    )
-    
-    return parser.parse_args()
 
 
 # ============================================
