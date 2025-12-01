@@ -15,7 +15,6 @@ import os
 import sys
 import argparse
 import time
-import json
 import csv
 from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass, field
@@ -57,9 +56,28 @@ OOD_THRESHOLD = 0.7  # Confidence threshold for OOD detection
 LABEL_SMOOTHING = 0.1
 WEIGHT_DECAY = 1e-4
 
-# Colorblind-friendly palette
+# Maximum number of classes to display in calibration curve (for readability)
+MAX_CALIBRATION_CLASSES = 5
+
+# Whether to call plt.show() after saving plots (useful for Kaggle notebooks)
+SHOW_PLOTS = True
+
+# Colorblind-friendly palette (extended for more classes)
 COLORS = ['#0077BB', '#33BBEE', '#009988', '#EE7733', '#CC3311',
-          '#EE3377', '#BBBBBB', '#AA4499', '#999933', '#44AA99']
+          '#EE3377', '#BBBBBB', '#AA4499', '#999933', '#44AA99',
+          '#117733', '#882255', '#332288', '#88CCEE', '#DDCC77']
+
+
+def get_color(index: int) -> str:
+    """Get color from palette using modulo to avoid index errors.
+    
+    Args:
+        index: Color index
+        
+    Returns:
+        Color hex string
+    """
+    return COLORS[index % len(COLORS)]
 
 # ============================================
 # DATA CLASSES FOR METRICS
@@ -140,7 +158,9 @@ def get_gpu_memory_info() -> str:
         gpus = tf.config.list_physical_devices('GPU')
         if gpus:
             # Try to get memory info (only works with certain TF versions)
-            info = tf.config.experimental.get_memory_info('GPU:0')
+            # Use first available GPU
+            gpu_device = gpus[0].name.replace('/physical_device:', '')
+            info = tf.config.experimental.get_memory_info(gpu_device)
             current_mb = info['current'] / (1024**2)
             peak_mb = info['peak'] / (1024**2)
             return f"Current: {current_mb:.0f}MB, Peak: {peak_mb:.0f}MB"
@@ -801,7 +821,8 @@ def plot_training_history(history: TrainingHistory, phase: str = 'training', out
     plt.tight_layout()
     filename = os.path.join(output_dirs['visualizations'], f'training_history_{phase}.png')
     plt.savefig(filename, dpi=300, bbox_inches='tight')
-    plt.show()
+    if SHOW_PLOTS:
+        plt.show()
     plt.close()
     print(f"✓ Saved: {filename}")
 
@@ -866,7 +887,8 @@ def plot_combined_training_history(
     
     filename = os.path.join(output_dirs['visualizations'], 'training_combined.png')
     plt.savefig(filename, dpi=300, bbox_inches='tight')
-    plt.show()
+    if SHOW_PLOTS:
+        plt.show()
     plt.close()
     print(f"✓ Saved: {filename}")
 
@@ -903,7 +925,8 @@ def plot_learning_rate_history(
     
     filename = os.path.join(output_dirs['visualizations'], 'learning_rate_history.png')
     plt.savefig(filename, dpi=300, bbox_inches='tight')
-    plt.show()
+    if SHOW_PLOTS:
+        plt.show()
     plt.close()
     print(f"✓ Saved: {filename}")
 
@@ -960,7 +983,8 @@ def plot_confusion_matrix(
     
     filename = os.path.join(output_dirs['visualizations'], f'confusion_matrix_{suffix}.png')
     plt.savefig(filename, dpi=300, bbox_inches='tight')
-    plt.show()
+    if SHOW_PLOTS:
+        plt.show()
     plt.close()
     print(f"✓ Saved: {filename}")
 
@@ -989,8 +1013,7 @@ def plot_roc_curves(
         if len(np.unique(y_true_bin[:, i])) > 1:
             fpr, tpr, _ = roc_curve(y_true_bin[:, i], metrics.y_pred_proba[:, i])
             roc_auc = auc(fpr, tpr)
-            color = COLORS[i % len(COLORS)]
-            plt.plot(fpr, tpr, color=color, linewidth=2,
+            plt.plot(fpr, tpr, color=get_color(i), linewidth=2,
                     label=f'{class_names[i]} (AUC={roc_auc:.3f})')
     
     plt.plot([0, 1], [0, 1], 'k--', linewidth=1, label='Random Classifier')
@@ -1006,7 +1029,8 @@ def plot_roc_curves(
     
     filename = os.path.join(output_dirs['visualizations'], 'roc_curves.png')
     plt.savefig(filename, dpi=300, bbox_inches='tight')
-    plt.show()
+    if SHOW_PLOTS:
+        plt.show()
     plt.close()
     print(f"✓ Saved: {filename}")
 
@@ -1037,8 +1061,7 @@ def plot_precision_recall_curves(
                 y_true_bin[:, i], metrics.y_pred_proba[:, i]
             )
             ap = metrics.per_class_pr_auc[i]
-            color = COLORS[i % len(COLORS)]
-            plt.plot(recall_curve, precision_curve, color=color, linewidth=2,
+            plt.plot(recall_curve, precision_curve, color=get_color(i), linewidth=2,
                     label=f'{class_names[i]} (AP={ap:.3f})')
     
     plt.xlim([0.0, 1.0])
@@ -1053,7 +1076,8 @@ def plot_precision_recall_curves(
     
     filename = os.path.join(output_dirs['visualizations'], 'precision_recall_curves.png')
     plt.savefig(filename, dpi=300, bbox_inches='tight')
-    plt.show()
+    if SHOW_PLOTS:
+        plt.show()
     plt.close()
     print(f"✓ Saved: {filename}")
 
@@ -1096,7 +1120,8 @@ def plot_per_class_metrics_bar(
     plt.tight_layout()
     filename = os.path.join(output_dirs['visualizations'], 'per_class_metrics_bar.png')
     plt.savefig(filename, dpi=300, bbox_inches='tight')
-    plt.show()
+    if SHOW_PLOTS:
+        plt.show()
     plt.close()
     print(f"✓ Saved: {filename}")
 
@@ -1149,7 +1174,8 @@ def plot_per_class_metrics_heatmap(
     
     filename = os.path.join(output_dirs['visualizations'], 'per_class_metrics_heatmap.png')
     plt.savefig(filename, dpi=300, bbox_inches='tight')
-    plt.show()
+    if SHOW_PLOTS:
+        plt.show()
     plt.close()
     print(f"✓ Saved: {filename}")
 
@@ -1210,7 +1236,8 @@ def plot_dataset_comparison_bar(
     plt.tight_layout()
     filename = os.path.join(output_dirs['visualizations'], 'dataset_comparison_bar.png')
     plt.savefig(filename, dpi=300, bbox_inches='tight')
-    plt.show()
+    if SHOW_PLOTS:
+        plt.show()
     plt.close()
     print(f"✓ Saved: {filename}")
 
@@ -1287,7 +1314,8 @@ def plot_dataset_comparison_radar(
     plt.tight_layout()
     filename = os.path.join(output_dirs['visualizations'], 'dataset_comparison_radar.png')
     plt.savefig(filename, dpi=300, bbox_inches='tight')
-    plt.show()
+    if SHOW_PLOTS:
+        plt.show()
     plt.close()
     print(f"✓ Saved: {filename}")
 
@@ -1308,8 +1336,11 @@ def plot_class_distribution(
     classes = list(class_counts.keys())
     counts = list(class_counts.values())
     
+    # Use get_color for safe color access
+    bar_colors = [get_color(i) for i in range(len(classes))]
+    
     plt.figure(figsize=(12, 6))
-    bars = plt.bar(range(len(classes)), counts, color=COLORS[:len(classes)], edgecolor='black')
+    bars = plt.bar(range(len(classes)), counts, color=bar_colors, edgecolor='black')
     
     # Add count labels on bars
     for bar, count in zip(bars, counts):
@@ -1330,7 +1361,8 @@ def plot_class_distribution(
     plt.tight_layout()
     filename = os.path.join(output_dirs['visualizations'], 'class_distribution.png')
     plt.savefig(filename, dpi=300, bbox_inches='tight')
-    plt.show()
+    if SHOW_PLOTS:
+        plt.show()
     plt.close()
     print(f"✓ Saved: {filename}")
 
@@ -1377,7 +1409,8 @@ def plot_confidence_distribution(
     plt.tight_layout()
     filename = os.path.join(output_dirs['visualizations'], 'confidence_distribution.png')
     plt.savefig(filename, dpi=300, bbox_inches='tight')
-    plt.show()
+    if SHOW_PLOTS:
+        plt.show()
     plt.close()
     print(f"✓ Saved: {filename}")
 
@@ -1405,7 +1438,8 @@ def plot_calibration_curve(
     num_classes = len(class_names)
     y_true_bin = label_binarize(metrics.y_true, classes=range(num_classes))
     
-    for i in range(min(5, num_classes)):  # Limit to first 5 classes for readability
+    # Limit to MAX_CALIBRATION_CLASSES for readability
+    for i in range(min(MAX_CALIBRATION_CLASSES, num_classes)):
         try:
             if len(np.unique(y_true_bin[:, i])) > 1:
                 prob_true, prob_pred = calibration_curve(
@@ -1414,7 +1448,7 @@ def plot_calibration_curve(
                     n_bins=10,
                     strategy='uniform'
                 )
-                plt.plot(prob_pred, prob_true, 's-', color=COLORS[i],
+                plt.plot(prob_pred, prob_true, 's-', color=get_color(i),
                         label=f'{class_names[i]}', linewidth=2)
         except Exception:
             continue
@@ -1428,7 +1462,8 @@ def plot_calibration_curve(
     plt.tight_layout()
     filename = os.path.join(output_dirs['visualizations'], 'calibration_curve.png')
     plt.savefig(filename, dpi=300, bbox_inches='tight')
-    plt.show()
+    if SHOW_PLOTS:
+        plt.show()
     plt.close()
     print(f"✓ Saved: {filename}")
 
