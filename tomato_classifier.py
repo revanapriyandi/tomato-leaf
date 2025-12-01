@@ -2308,25 +2308,13 @@ def main(
 
 
 if __name__ == "__main__":
-    # Training is always done in notebook environments (Kaggle, Colab, Jupyter)
-    # Users should call run() function directly with custom parameters
-    print("="*60)
-    print("🍅 TOMATO DISEASE CLASSIFIER")
-    print("="*60)
-    print("\nTo train the model, call the run() function:")
-    print("  from tomato_classifier import run")
-    print("  run()  # Use default settings")
-    print("")
-    print("Or customize training parameters:")
-    print("  run(")
-    print("      dataset_path='/kaggle/input/my-dataset',")
-    print("      epochs=10,")
-    print("      epochs_ft=20,")
-    print("      batch_size=32,")
-    print("      dry_run=False,")
-    print("      use_mixed_precision=True")
-    print("  )")
-    print("")
-    print("Default configuration:")
-    print(f"  {DEFAULT_CONFIG}")
-    print("="*60)
+    # Start training directly with default configuration
+    # To change parameters, edit DEFAULT_CONFIG above
+    run(
+        dataset_path=DEFAULT_CONFIG['dataset_path'],
+        epochs=DEFAULT_CONFIG['epochs'],
+        epochs_ft=DEFAULT_CONFIG['epochs_ft'],
+        batch_size=DEFAULT_CONFIG['batch_size'],
+        dry_run=DEFAULT_CONFIG['dry_run'],
+        use_mixed_precision=DEFAULT_CONFIG['use_mixed_precision'],
+    )
