@@ -63,35 +63,6 @@ MAX_CALIBRATION_CLASSES = 5
 SHOW_PLOTS = True
 
 
-def is_notebook_environment() -> bool:
-    """Detect if running in a Jupyter/Kaggle/Colab notebook environment.
-    
-    Returns:
-        True if running in a notebook environment, False otherwise.
-    """
-    try:
-        # Check if get_ipython exists and returns an interactive shell
-        shell = get_ipython().__class__.__name__
-        if shell == 'ZMQInteractiveShell':
-            return True  # Jupyter notebook or qtconsole
-        elif shell == 'TerminalInteractiveShell':
-            return False  # Terminal running IPython
-        else:
-            return False
-    except NameError:
-        pass  # get_ipython doesn't exist
-    
-    # Check for ipykernel in sys.modules
-    if 'ipykernel' in sys.modules:
-        return True
-    
-    # Check for google.colab in sys.modules (Colab-specific)
-    if 'google.colab' in sys.modules:
-        return True
-    
-    return False
-
-
 def get_default_dataset_path() -> str:
     """Get the default dataset path, prioritizing Kaggle input paths.
     
@@ -2337,47 +2308,25 @@ def main(
 
 
 if __name__ == "__main__":
-    # Check if running in a notebook environment
-    if is_notebook_environment():
-        # In notebook environments, skip argparse and use defaults
-        # Users should call run() function directly with custom parameters
-        print("="*60)
-        print("🔔 NOTEBOOK ENVIRONMENT DETECTED")
-        print("="*60)
-        print("\nTo train the model, call the run() function:")
-        print("  from tomato_classifier import run")
-        print("  run()  # Use default settings")
-        print("")
-        print("Or customize training parameters:")
-        print("  run(")
-        print("      dataset_path='/kaggle/input/my-dataset',")
-        print("      epochs=10,")
-        print("      epochs_ft=20,")
-        print("      batch_size=32,")
-        print("      dry_run=False,")
-        print("      use_mixed_precision=True")
-        print("  )")
-        print("")
-        print("Default configuration:")
-        print(f"  {DEFAULT_CONFIG}")
-        print("="*60)
-    else:
-        # Command-line usage: parse arguments
-        args = parse_arguments()
-        
-        # Determine dataset path
-        if args.dataset_path:
-            dataset_path = args.dataset_path
-        else:
-            dataset_path = get_default_dataset_path()
-        
-        print(f"Dataset path: {dataset_path}")
-        
-        main(
-            dataset_path=dataset_path,
-            dry_run=args.dry_run,
-            epochs=args.epochs,
-            epochs_ft=args.epochs_ft,
-            batch_size=args.batch_size,
-            use_mixed_precision=not args.no_mixed_precision
-        )
+    # Training is always done in notebook environments (Kaggle, Colab, Jupyter)
+    # Users should call run() function directly with custom parameters
+    print("="*60)
+    print("🍅 TOMATO DISEASE CLASSIFIER")
+    print("="*60)
+    print("\nTo train the model, call the run() function:")
+    print("  from tomato_classifier import run")
+    print("  run()  # Use default settings")
+    print("")
+    print("Or customize training parameters:")
+    print("  run(")
+    print("      dataset_path='/kaggle/input/my-dataset',")
+    print("      epochs=10,")
+    print("      epochs_ft=20,")
+    print("      batch_size=32,")
+    print("      dry_run=False,")
+    print("      use_mixed_precision=True")
+    print("  )")
+    print("")
+    print("Default configuration:")
+    print(f"  {DEFAULT_CONFIG}")
+    print("="*60)
