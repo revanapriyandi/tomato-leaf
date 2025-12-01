@@ -416,7 +416,14 @@ def is_valid_image_file(filepath: str, mode: str = IMAGE_VALIDATION_MODE) -> Tup
         Tuple of (is_valid, reason) where:
         - is_valid: True if image passes validation
         - reason: Description of why the image was rejected (empty string if valid)
+        
+    Raises:
+        ValueError: If mode is not 'header' or 'full'
     """
+    # Validate mode parameter
+    if mode not in ('header', 'full'):
+        raise ValueError(f"Invalid mode '{mode}'. Must be 'header' or 'full'")
+    
     # Fast header-based validation
     is_valid, reason = has_valid_image_header(filepath)
     if not is_valid:
@@ -606,9 +613,9 @@ def create_dataset_from_paths(
     # crashing if any edge cases slip through the validation.
     dataset = dataset.ignore_errors(log_warning=True)
     
-    # Batch first, then cache for memory efficiency
-    # Caching after batching stores batched tensors which uses less memory
-    # than caching individual samples when shuffle is enabled
+    # Batch first, then cache. Caching after batching is more memory efficient
+    # when using shuffle, as it stores pre-batched tensors rather than 
+    # individual samples that would need to be re-batched on each epoch.
     dataset = dataset.batch(batch_size)
     dataset = dataset.cache()
     dataset = dataset.prefetch(buffer_size=tf.data.AUTOTUNE)
