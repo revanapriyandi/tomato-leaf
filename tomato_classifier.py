@@ -339,6 +339,57 @@ VALID_IMAGE_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp')
 MIN_IMAGE_FILE_SIZE = 100
 
 
+def is_valid_image_file(filepath: str) -> bool:
+    """Check if file has valid image header (magic bytes).
+    
+    This function validates images by checking their magic bytes (file signatures)
+    without fully loading the image, which is faster and more robust for initial
+    validation during dataset scanning.
+    
+    Supported formats:
+    - JPEG (FF D8)
+    - PNG (89 50 4E 47 / 89PNG)
+    - BMP (42 4D / BM)
+    - GIF (47 49 46 38 / GIF8)
+    - WebP (52 49 46 46 ... 57 45 42 50 / RIFF...WEBP)
+    
+    Args:
+        filepath: Path to the file to validate
+        
+    Returns:
+        True if file has valid image magic bytes, False otherwise
+    """
+    try:
+        # Check file exists and is not empty
+        if not os.path.isfile(filepath):
+            return False
+        if os.path.getsize(filepath) == 0:
+            return False
+        
+        with open(filepath, 'rb') as f:
+            header = f.read(12)
+            if not header:
+                return False
+            # JPEG (FF D8)
+            if header.startswith(b'\xff\xd8'):
+                return True
+            # PNG (89 50 4E 47)
+            if header.startswith(b'\x89PNG'):
+                return True
+            # BMP (42 4D)
+            if header.startswith(b'BM'):
+                return True
+            # GIF (47 49 46 38)
+            if header.startswith(b'GIF8'):
+                return True
+            # WebP (RIFF....WEBP)
+            if header.startswith(b'RIFF') and header[8:12] == b'WEBP':
+                return True
+            return False
+    except (OSError, IOError):
+        return False
+
+
 def is_valid_image(file_path: str) -> bool:
     """Check if a file is a valid image that can be decoded.
     
@@ -529,107 +580,292 @@ def validate_and_clean_dataset(
     return result
 
 
+def get_image_files_and_labels(
+    data_dir: str,
+    class_names: Optional[List[str]] = None
+) -> Tuple[List[str], List[int], List[str], Dict[str, int]]:
+    """Scan directory for valid images and return file paths with labels.
+    
+    This function scans the data directory for valid images using magic bytes
+    validation. It filters out corrupted or invalid files and reports any
+    skipped files.
+    
+    Args:
+        data_dir: Path to data directory (e.g., 'train', 'val', or 'test')
+        class_names: Optional list of class names. If None, will be auto-detected
+            from subdirectory names (sorted alphabetically).
+            
+    Returns:
+        Tuple of (file_paths, labels, class_names, class_counts) where:
+        - file_paths: List of valid image file paths
+        - labels: List of integer labels corresponding to each file
+        - class_names: List of class names (sorted alphabetically)
+        - class_counts: Dictionary mapping class names to sample counts
+    """
+    if not os.path.exists(data_dir):
+        raise FileNotFoundError(f"Data directory not found: {data_dir}")
+    
+    # Auto-detect class names if not provided
+    if class_names is None:
+        class_names = sorted([
+            d for d in os.listdir(data_dir)
+            if os.path.isdir(os.path.join(data_dir, d)) and not d.startswith('.')
+        ])
+    
+    if len(class_names) == 0:
+        raise ValueError(f"No class directories found in {data_dir}")
+    
+    file_paths = []
+    labels = []
+    class_counts = {name: 0 for name in class_names}
+    skipped_files = []
+    
+    for class_idx, class_name in enumerate(class_names):
+        class_dir = os.path.join(data_dir, class_name)
+        if not os.path.isdir(class_dir):
+            continue
+        
+        for filename in os.listdir(class_dir):
+            # Skip hidden files
+            if filename.startswith('.'):
+                continue
+            
+            # Check file extension
+            if not filename.lower().endswith(VALID_IMAGE_EXTENSIONS):
+                continue
+            
+            file_path = os.path.join(class_dir, filename)
+            
+            # Validate using magic bytes
+            if is_valid_image_file(file_path):
+                file_paths.append(file_path)
+                labels.append(class_idx)
+                class_counts[class_name] += 1
+            else:
+                skipped_files.append(file_path)
+    
+    # Report skipped files
+    if skipped_files:
+        print(f"  ⚠ Skipped {len(skipped_files)} invalid/corrupted files in {os.path.basename(data_dir)}")
+        if len(skipped_files) <= 5:
+            for f in skipped_files:
+                print(f"    - {os.path.basename(f)}")
+        else:
+            for f in skipped_files[:3]:
+                print(f"    - {os.path.basename(f)}")
+            print(f"    ... and {len(skipped_files) - 3} more")
+    
+    return file_paths, labels, class_names, class_counts
+
+
+def process_path(file_path: tf.Tensor, label: tf.Tensor, num_classes: int) -> Tuple[tf.Tensor, tf.Tensor]:
+    """Process a single file path to load and preprocess the image.
+    
+    This function is designed to be used with tf.data.Dataset.map().
+    It reads the image file, decodes it, resizes it, and returns it
+    along with the one-hot encoded label.
+    
+    Args:
+        file_path: TensorFlow string tensor containing the file path
+        label: TensorFlow int tensor containing the class label
+        num_classes: Number of classes for one-hot encoding
+        
+    Returns:
+        Tuple of (image, one_hot_label) where:
+        - image: Float32 tensor of shape (IMG_SIZE, IMG_SIZE, 3) with values in [0, 255]
+        - one_hot_label: Float32 tensor of shape (num_classes,)
+    """
+    # Read and decode image
+    img = tf.io.read_file(file_path)
+    img = tf.io.decode_image(img, channels=3, expand_animations=False)
+    img = tf.image.resize(img, [IMG_SIZE, IMG_SIZE])
+    img = tf.cast(img, tf.float32)
+    
+    # One-hot encode label
+    one_hot_label = tf.one_hot(label, num_classes)
+    
+    return img, one_hot_label
+
+
+def create_dataset_from_paths(
+    file_paths: List[str],
+    labels: List[int],
+    num_classes: int,
+    batch_size: int = BATCH_SIZE,
+    shuffle: bool = True,
+    seed: int = 42
+) -> tf.data.Dataset:
+    """Create a tf.data.Dataset from validated file paths and labels.
+    
+    This function creates an optimized TensorFlow dataset from a list of
+    validated image file paths and their corresponding labels. It handles
+    batching, caching, prefetching, and optional shuffling.
+    
+    Args:
+        file_paths: List of validated image file paths
+        labels: List of integer labels corresponding to each file
+        num_classes: Number of classes for one-hot encoding
+        batch_size: Batch size for the dataset
+        shuffle: Whether to shuffle the dataset (default: True)
+        seed: Random seed for shuffling (default: 42)
+        
+    Returns:
+        Optimized tf.data.Dataset with batched (image, label) pairs
+    """
+    if len(file_paths) == 0:
+        raise ValueError("No file paths provided for dataset creation")
+    
+    if len(file_paths) != len(labels):
+        raise ValueError(f"Mismatch between file_paths ({len(file_paths)}) and labels ({len(labels)})")
+    
+    # Create dataset from file paths and labels
+    dataset = tf.data.Dataset.from_tensor_slices((file_paths, labels))
+    
+    # Shuffle before mapping (more efficient)
+    if shuffle:
+        dataset = dataset.shuffle(buffer_size=len(file_paths), seed=seed, reshuffle_each_iteration=True)
+    
+    # Map the processing function
+    # Use a lambda to capture num_classes
+    dataset = dataset.map(
+        lambda fp, lbl: process_path(fp, lbl, num_classes),
+        num_parallel_calls=tf.data.AUTOTUNE
+    )
+    
+    # Batch and optimize
+    dataset = dataset.batch(batch_size)
+    dataset = dataset.cache()
+    dataset = dataset.prefetch(buffer_size=tf.data.AUTOTUNE)
+    
+    return dataset
+
+
 def create_datasets(dataset_path: str = '.', batch_size: int = BATCH_SIZE, validate: bool = True) -> Tuple[tf.data.Dataset, tf.data.Dataset, tf.data.Dataset, List[str], Dict[str, int]]:
-    """Create train, validation, and test datasets.
+    """Create train, validation, and test datasets using robust image loading.
+    
+    This function uses a robust data loading approach that validates each image
+    using magic bytes before loading. This prevents crashes from corrupted or
+    invalid image files in the dataset.
     
     Args:
         dataset_path: Path to the dataset root directory
         batch_size: Batch size for datasets
-        validate: If True, validate and report on invalid images before loading (default: True)
+        validate: If True, run full validation and report on invalid images 
+            before loading (default: True). Note: Basic validation via magic
+            bytes is always performed during file scanning.
         
     Returns:
         Tuple of (train_ds, val_ds, test_ds, class_names, class_counts)
     """
     _, has_val = check_dataset_path(dataset_path)
     
-    # Validate dataset before loading
+    # Optionally run full validation to report issues
     if validate:
         validation_result = validate_and_clean_dataset(dataset_path)
         if validation_result['invalid_count'] > 0:
-            print(f"⚠ Found {validation_result['invalid_count']} invalid files that may cause loading errors.")
-            print("  To fix, run: validate_and_clean_dataset(dataset_path, remove_invalid=True)")
-            print("  Or to move files: validate_and_clean_dataset(dataset_path, move_to_folder='invalid_images')")
-
-    load_params = dict(
-        seed=42,
-        image_size=(IMG_SIZE, IMG_SIZE),
-        batch_size=batch_size,
-        label_mode='categorical'
-    )
+            print(f"⚠ Found {validation_result['invalid_count']} invalid files that will be skipped during loading.")
+            print("  To remove: validate_and_clean_dataset(dataset_path, remove_invalid=True)")
+            print("  To move: validate_and_clean_dataset(dataset_path, move_to_folder='invalid_images')")
 
     print(f"\n{'='*60}")
-    print("LOADING DATASETS")
+    print("LOADING DATASETS (Robust Mode)")
     print(f"{'='*60}")
 
     train_dir = os.path.join(dataset_path, 'train')
     test_dir = os.path.join(dataset_path, 'test')
 
-    if has_val:
-        val_dir = os.path.join(dataset_path, 'val')
-
-        train_ds = keras.utils.image_dataset_from_directory(
-            train_dir,
-            shuffle=True,
-            **load_params
-        )
-
-        val_ds = keras.utils.image_dataset_from_directory(
-            val_dir,
-            shuffle=False,
-            **load_params
-        )
-    else:
-        train_ds = keras.utils.image_dataset_from_directory(
-            train_dir,
-            validation_split=0.1,
-            subset="training",
-            shuffle=True,
-            **load_params
-        )
-
-        val_ds = keras.utils.image_dataset_from_directory(
-            train_dir,
-            validation_split=0.1,
-            subset="validation",
-            shuffle=False,
-            **load_params
-        )
-
-    test_ds = keras.utils.image_dataset_from_directory(
-        test_dir,
-        shuffle=False,
-        **load_params
-    )
-
-    class_names = train_ds.class_names
+    # Scan and validate training data
+    print("\nScanning training directory...")
+    train_paths, train_labels, class_names, train_class_counts = get_image_files_and_labels(train_dir)
+    
     if len(class_names) == 0:
         raise ValueError("No classes found in training directory!")
     
-    # Count samples per class
-    class_counts = count_class_samples(train_dir, class_names)
+    if len(train_paths) == 0:
+        raise ValueError("No valid images found in training directory!")
     
-    print(f"Classes detected ({len(class_names)}): {class_names}")
-    print(f"\nClass distribution:")
-    for name, count in class_counts.items():
+    num_classes = len(class_names)
+    
+    # Handle validation data
+    if has_val:
+        val_dir = os.path.join(dataset_path, 'val')
+        print("\nScanning validation directory...")
+        val_paths, val_labels, _, _ = get_image_files_and_labels(val_dir, class_names)
+        
+        # Create training dataset
+        train_ds = create_dataset_from_paths(
+            train_paths, train_labels, num_classes, 
+            batch_size=batch_size, shuffle=True, seed=42
+        )
+        
+        # Create validation dataset
+        val_ds = create_dataset_from_paths(
+            val_paths, val_labels, num_classes,
+            batch_size=batch_size, shuffle=False
+        )
+    else:
+        # Split training data for validation (10%)
+        print("\n  No validation directory found, splitting from train (10%)...")
+        
+        # Shuffle data before splitting to ensure random split
+        np.random.seed(42)
+        indices = np.random.permutation(len(train_paths))
+        split_idx = int(len(indices) * 0.9)
+        
+        train_indices = indices[:split_idx]
+        val_indices = indices[split_idx:]
+        
+        train_paths_split = [train_paths[i] for i in train_indices]
+        train_labels_split = [train_labels[i] for i in train_indices]
+        val_paths_split = [train_paths[i] for i in val_indices]
+        val_labels_split = [train_labels[i] for i in val_indices]
+        
+        # Update train_class_counts to reflect the split
+        train_class_counts = {name: 0 for name in class_names}
+        for lbl in train_labels_split:
+            train_class_counts[class_names[lbl]] += 1
+        
+        # Create training dataset
+        train_ds = create_dataset_from_paths(
+            train_paths_split, train_labels_split, num_classes,
+            batch_size=batch_size, shuffle=True, seed=42
+        )
+        
+        # Create validation dataset
+        val_ds = create_dataset_from_paths(
+            val_paths_split, val_labels_split, num_classes,
+            batch_size=batch_size, shuffle=False
+        )
+    
+    # Scan and validate test data
+    print("\nScanning test directory...")
+    test_paths, test_labels, _, _ = get_image_files_and_labels(test_dir, class_names)
+    
+    # Create test dataset
+    test_ds = create_dataset_from_paths(
+        test_paths, test_labels, num_classes,
+        batch_size=batch_size, shuffle=False
+    )
+    
+    print(f"\nClasses detected ({len(class_names)}): {class_names}")
+    print(f"\nClass distribution (training):")
+    for name, count in train_class_counts.items():
         print(f"  {name}: {count} samples")
 
-    # Performance optimization
-    AUTOTUNE = tf.data.AUTOTUNE
-    train_ds = train_ds.cache().prefetch(buffer_size=AUTOTUNE)
-    val_ds = val_ds.cache().prefetch(buffer_size=AUTOTUNE)
-    test_ds = test_ds.cache().prefetch(buffer_size=AUTOTUNE)
-
-    return train_ds, val_ds, test_ds, class_names, class_counts
+    return train_ds, val_ds, test_ds, class_names, train_class_counts
 
 
-def count_class_samples(data_dir: str, class_names: List[str]) -> Dict[str, int]:
+def count_class_samples(data_dir: str, class_names: List[str], validate_images: bool = True) -> Dict[str, int]:
     """Count samples per class in a directory.
     
-    Only counts valid image files (not hidden files like .DS_Store).
+    Counts valid image files using magic bytes validation by default.
+    Hidden files (like .DS_Store) are always excluded.
     
     Args:
         data_dir: Path to data directory
         class_names: List of class names
+        validate_images: If True, validates each image using magic bytes.
+            If False, only checks file extension (faster but less robust).
         
     Returns:
         Dictionary mapping class names to sample counts
@@ -638,36 +874,53 @@ def count_class_samples(data_dir: str, class_names: List[str]) -> Dict[str, int]
     for class_name in class_names:
         class_dir = os.path.join(data_dir, class_name)
         if os.path.exists(class_dir):
-            # Count image files, excluding hidden files
-            count = len([f for f in os.listdir(class_dir) 
-                        if not f.startswith('.') and 
-                        f.lower().endswith(VALID_IMAGE_EXTENSIONS)])
+            count = 0
+            for f in os.listdir(class_dir):
+                # Skip hidden files
+                if f.startswith('.'):
+                    continue
+                # Check file extension
+                if not f.lower().endswith(VALID_IMAGE_EXTENSIONS):
+                    continue
+                    
+                file_path = os.path.join(class_dir, f)
+                
+                # Optionally validate using magic bytes
+                if validate_images:
+                    if is_valid_image_file(file_path):
+                        count += 1
+                else:
+                    count += 1
+                    
             class_counts[class_name] = count
         else:
             class_counts[class_name] = 0
     return class_counts
 
 
-def get_class_weights(train_dir: str, class_names: List[str]) -> Dict[int, float]:
+def get_class_weights(train_dir: str, class_names: List[str], validate_images: bool = True) -> Dict[int, float]:
     """Compute class weights for imbalanced datasets.
+    
+    Uses robust image validation to ensure accurate class counts
+    for weight computation.
     
     Args:
         train_dir: Path to training directory
         class_names: List of class names
+        validate_images: If True, validates each image using magic bytes.
+            If False, only checks file extension (faster but less robust).
         
     Returns:
         Dictionary mapping class indices to weights
     """
-    # Collect all labels
+    # Use count_class_samples with validation to get accurate counts
+    class_counts = count_class_samples(train_dir, class_names, validate_images=validate_images)
+    
+    # Collect all labels based on validated counts
     labels = []
     for class_idx, class_name in enumerate(class_names):
-        class_dir = os.path.join(train_dir, class_name)
-        if os.path.exists(class_dir):
-            # Count valid image files, excluding hidden files
-            count = len([f for f in os.listdir(class_dir) 
-                        if not f.startswith('.') and 
-                        f.lower().endswith(VALID_IMAGE_EXTENSIONS)])
-            labels.extend([class_idx] * count)
+        count = class_counts.get(class_name, 0)
+        labels.extend([class_idx] * count)
     
     if len(labels) == 0:
         return {i: 1.0 for i in range(len(class_names))}
