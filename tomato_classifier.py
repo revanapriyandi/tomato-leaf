@@ -335,13 +335,16 @@ def check_dataset_path(dataset_path: str) -> Tuple[bool, bool]:
 # Valid image extensions supported by TensorFlow
 VALID_IMAGE_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp')
 
+# Minimum file size in bytes (files smaller than this are likely corrupted)
+MIN_IMAGE_FILE_SIZE = 100
+
 
 def is_valid_image(file_path: str) -> bool:
     """Check if a file is a valid image that can be decoded.
     
     Validates by:
     1. Checking file extension is a valid image format
-    2. Checking minimum file size (files < 100 bytes are likely corrupted)
+    2. Checking minimum file size (files < MIN_IMAGE_FILE_SIZE bytes are likely corrupted)
     3. Using PIL to verify image format and data integrity
     4. Falls back to TensorFlow if PIL is not available
     
@@ -364,8 +367,8 @@ def is_valid_image(file_path: str) -> bool:
     if not filename.lower().endswith(VALID_IMAGE_EXTENSIONS):
         return False
     
-    # Check minimum file size (files less than 100 bytes are likely corrupted)
-    if os.path.getsize(file_path) < 100:
+    # Check minimum file size (files smaller than threshold are likely corrupted)
+    if os.path.getsize(file_path) < MIN_IMAGE_FILE_SIZE:
         return False
     
     # Try to validate using PIL (more tolerant than TensorFlow)
@@ -377,7 +380,7 @@ def is_valid_image(file_path: str) -> bool:
         with Image.open(file_path) as img:
             img.load()
         return True
-    except Exception:
+    except (IOError, OSError, Image.DecompressionBombError, Image.UnidentifiedImageError):
         pass
     
     # Fallback to TensorFlow if PIL fails
@@ -385,7 +388,7 @@ def is_valid_image(file_path: str) -> bool:
         image_data = tf.io.read_file(file_path)
         _ = tf.io.decode_image(image_data)
         return True
-    except Exception:
+    except (tf.errors.InvalidArgumentError, tf.errors.NotFoundError, tf.errors.OpError):
         return False
 
 
