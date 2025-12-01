@@ -374,13 +374,10 @@ def is_valid_image(file_path: str) -> bool:
     # Try to validate using PIL (more tolerant than TensorFlow)
     try:
         with Image.open(file_path) as img:
-            # Verify the image format is valid
-            img.verify()
-        # Re-open to verify data can actually be loaded (verify() invalidates the image)
-        with Image.open(file_path) as img:
+            # load() reads the image data and validates it can be decoded
             img.load()
         return True
-    except (IOError, OSError, Image.DecompressionBombError, Image.UnidentifiedImageError):
+    except OSError:
         pass
     
     # Fallback to TensorFlow if PIL fails
