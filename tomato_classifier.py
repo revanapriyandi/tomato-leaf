@@ -3,7 +3,6 @@ Sistem Klasifikasi Penyakit Daun Tomat - DenseNet121
 """
 
 import os
-import sys
 import time
 import csv
 import functools
@@ -96,6 +95,47 @@ DEFAULT_CONFIG = {
     'dry_run': False,
     'use_mixed_precision': True,
 }
+
+
+# ============================================
+# CUSTOM LAYERS FOR MODEL SERIALIZATION
+# ============================================
+@keras.saving.register_keras_serializable(package="TomatoClassifier")
+class ClipLayer(layers.Layer):
+    """Custom layer to clip values to 0-255 range.
+
+    This layer is used instead of a Lambda layer to ensure proper
+    model serialization and deserialization without requiring unsafe mode.
+    """
+    def call(self, inputs):
+        """Clip input values to the 0-255 range.
+
+        Args:
+            inputs: Input tensor with values that may be outside 0-255.
+
+        Returns:
+            Tensor with values clipped to 0-255 range.
+        """
+        return keras.ops.clip(inputs, 0, 255)
+
+
+@keras.saving.register_keras_serializable(package="TomatoClassifier")
+class DenseNetPreprocessLayer(layers.Layer):
+    """Custom layer for DenseNet preprocessing.
+
+    This layer is used instead of a Lambda layer to ensure proper
+    model serialization and deserialization without requiring unsafe mode.
+    """
+    def call(self, inputs):
+        """Apply DenseNet-specific preprocessing to input tensor.
+
+        Args:
+            inputs: Input tensor in RGB format with values in 0-255 range.
+
+        Returns:
+            Preprocessed tensor suitable for DenseNet model input.
+        """
+        return keras.applications.densenet.preprocess_input(inputs)
 
 
 def run(
@@ -690,6 +730,13 @@ def create_datasets(dataset_path: str = '.', batch_size: int = BATCH_SIZE, seed:
         train_indices = indices[:split_idx]
         val_indices = indices[split_idx:]
         
+        # Validate that validation split is not empty
+        if len(val_indices) == 0:
+            raise ValueError(
+                "Validation split resulted in empty validation set. "
+                "Consider using a smaller TRAIN_VAL_SPLIT_RATIO or providing a separate validation directory."
+            )
+        
         # Use numpy array indexing (much faster than list comprehension)
         train_paths_split = train_paths_arr[train_indices].tolist()
         train_labels_split = train_labels_arr[train_indices].tolist()
@@ -794,15 +841,12 @@ def build_model(num_classes: int) -> keras.Model:
     # Apply augmentation only during training
     x = data_augmentation(inputs)
 
-    # Clip values to 0-255 range after augmentation using Lambda layer
-    x = layers.Lambda(lambda t: keras.ops.clip(t, 0, 255), name='clip_values')(x)
+    # Clip values to 0-255 range after augmentation using custom layer
+    x = ClipLayer(name='clip_values')(x)
 
     # Preprocess input (DenseNet expects specific scaling)
-    # Wrap in Lambda layer for Keras 3 compatibility
-    x = layers.Lambda(
-        lambda t: keras.applications.densenet.preprocess_input(t),
-        name='preprocess'
-    )(x)
+    # Use custom layer for proper model serialization
+    x = DenseNetPreprocessLayer(name='preprocess')(x)
 
     base_model = keras.applications.DenseNet121(
         weights='imagenet',
@@ -1334,7 +1378,9 @@ def plot_confusion_matrix(
     plt.figure(figsize=(12, 10))
     
     if normalized:
-        cm_display = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+        row_sums = cm.sum(axis=1)[:, np.newaxis]
+        row_sums[row_sums == 0] = 1  # Prevent division by zero
+        cm_display = cm.astype('float') / row_sums
         fmt = '.2%'
         suffix = 'normalized'
         cbar_label = 'Percentage'
@@ -1930,7 +1976,11 @@ def convert_to_tflite(
     print(f"{'='*60}")
 
     print(f"Loading model from: {model_path}")
-    model = keras.models.load_model(model_path)
+    try:
+        model = keras.models.load_model(model_path)
+    except ValueError:
+        # Fallback for models with custom layers that may require safe_mode=False
+        model = keras.models.load_model(model_path, safe_mode=False)
 
     converter = tf.lite.TFLiteConverter.from_keras_model(model)
     converter.optimizations = [tf.lite.Optimize.DEFAULT]
@@ -2328,7 +2378,10 @@ def main(
         class_weight=class_weight
     )
     plot_training_history(history_fe, 'feature_extraction', output_dirs)
-    best_epoch_fe = len(history_fe.val_accuracy) - history_fe.val_accuracy[::-1].index(max(history_fe.val_accuracy))
+    if history_fe.val_accuracy:
+        best_epoch_fe = len(history_fe.val_accuracy) - history_fe.val_accuracy[::-1].index(max(history_fe.val_accuracy))
+    else:
+        best_epoch_fe = 0
 
     # ========================================
     # STEP 4: Fine-Tuning
@@ -2378,7 +2431,10 @@ def main(
         class_weight=class_weight
     )
     plot_training_history(history_ft, 'fine_tuning', output_dirs)
-    best_epoch_ft = len(history_fe.val_accuracy) + len(history_ft.val_accuracy) - history_ft.val_accuracy[::-1].index(max(history_ft.val_accuracy))
+    if history_ft.val_accuracy:
+        best_epoch_ft = len(history_fe.val_accuracy) + len(history_ft.val_accuracy) - history_ft.val_accuracy[::-1].index(max(history_ft.val_accuracy))
+    else:
+        best_epoch_ft = len(history_fe.val_accuracy) if history_fe.val_accuracy else 0
     
     # Get final learning rate
     final_lr = history_ft.lr[-1] if history_ft.lr else FINE_TUNE_LR
@@ -2398,7 +2454,11 @@ def main(
     print("="*60)
     best_model_path = os.path.join(output_dirs['models'], 'best_model_fine_tuning.keras')
     if os.path.exists(best_model_path):
-        model = keras.models.load_model(best_model_path)
+        try:
+            model = keras.models.load_model(best_model_path)
+        except ValueError:
+            # Fallback for models with custom layers that may require safe_mode=False
+            model = keras.models.load_model(best_model_path, safe_mode=False)
         print(f"✓ Loaded best model from: {best_model_path}")
     else:
         print(f"⚠ Could not find {best_model_path}, using current model.")
