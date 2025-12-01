@@ -417,8 +417,9 @@ def is_valid_image_file(filepath: str) -> Tuple[bool, str]:
         # Use decode_image which handles JPEG, PNG, GIF, BMP
         # expand_animations=False ensures animated GIFs return single frame
         img = tf.io.decode_image(img_bytes, channels=3, expand_animations=False)
-        # Verify we got valid tensor with expected shape
-        if img.shape.rank != 3 or img.shape[2] != 3:
+        # Verify we got valid tensor with expected shape (height, width, channels)
+        # Use len() for shape validation as img.shape.rank may not be an integer
+        if len(img.shape) != 3 or img.shape[-1] != 3:
             return False, "decoded image has unexpected shape"
         return True, ""
     except tf.errors.InvalidArgumentError as e:
