@@ -65,6 +65,10 @@ SHOW_PLOTS = True
 SHUFFLE_BUFFER_SIZE = 10000  # Max buffer size for shuffling (limits memory usage)
 TRAIN_VAL_SPLIT_RATIO = 0.9  # Ratio for train/validation split when no val dir exists
 
+# Image validation mode: 'header' (fast, magic bytes only) or 'full' (slow, TF decode)
+# 'header' is recommended as ignore_errors() handles corrupted images during training
+IMAGE_VALIDATION_MODE = 'header'
+
 
 def get_default_dataset_path() -> str:
     """Get the default dataset path, prioritizing Kaggle input paths.
@@ -338,11 +342,12 @@ def check_dataset_path(dataset_path: str) -> Tuple[bool, bool]:
 VALID_IMAGE_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp')
 
 
-def has_valid_image_header(filepath: str) -> bool:
+def has_valid_image_header(filepath: str) -> Tuple[bool, str]:
     """Check if file has valid image header (magic bytes).
     
     This is a fast preliminary check that validates magic bytes before
-    attempting full TensorFlow decoding.
+    attempting full TensorFlow decoding. Optimized to minimize file system
+    operations by combining existence and size checks.
     
     Supported formats:
     - JPEG (FF D8)
@@ -355,63 +360,73 @@ def has_valid_image_header(filepath: str) -> bool:
         filepath: Path to the file to validate
         
     Returns:
-        True if file has valid image magic bytes, False otherwise
+        Tuple of (is_valid, reason) where:
+        - is_valid: True if file has valid image magic bytes
+        - reason: Description of why the file was rejected (empty string if valid)
     """
     try:
-        # Check file exists and is not empty
-        if not os.path.isfile(filepath):
-            return False
-        if os.path.getsize(filepath) == 0:
-            return False
+        # Single stat call to check existence and size (more efficient than separate calls)
+        file_stat = os.stat(filepath)
+        if file_stat.st_size == 0:
+            return False, "file is empty"
         
         with open(filepath, 'rb') as f:
             header = f.read(12)
             if not header:
-                return False
+                return False, "could not read file header"
             # JPEG (FF D8)
             if header.startswith(b'\xff\xd8'):
-                return True
+                return True, ""
             # PNG (89 50 4E 47)
             if header.startswith(b'\x89PNG'):
-                return True
+                return True, ""
             # BMP (42 4D)
             if header.startswith(b'BM'):
-                return True
+                return True, ""
             # GIF (GIF87a or GIF89a - both start with 'GIF8')
             if header.startswith(b'GIF87a') or header.startswith(b'GIF89a'):
-                return True
+                return True, ""
             # WebP (RIFF....WEBP)
             if header.startswith(b'RIFF') and header[8:12] == b'WEBP':
-                return True
-            return False
-    except (OSError, IOError):
-        return False
+                return True, ""
+            return False, "unrecognized image format"
+    except FileNotFoundError:
+        return False, "file not found"
+    except (OSError, IOError) as e:
+        return False, f"file access error: {str(e)[:50]}"
 
 
-def is_valid_image_file(filepath: str) -> Tuple[bool, str]:
-    """Validate image file using TensorFlow decoding.
+def is_valid_image_file(filepath: str, mode: str = IMAGE_VALIDATION_MODE) -> Tuple[bool, str]:
+    """Validate image file using configurable validation mode.
     
-    This function performs comprehensive image validation by:
-    1. First checking magic bytes (fast preliminary check)
-    2. Then attempting to decode the image with TensorFlow
+    This function supports two validation modes:
+    - 'header': Fast validation using magic bytes only (recommended)
+    - 'full': Comprehensive validation using TensorFlow decoding (slower)
     
-    This ensures that images with correct headers but corrupted content
-    are detected and excluded during dataset scanning, preventing crashes
-    during training.
+    The 'header' mode is recommended because:
+    1. It's significantly faster for large datasets
+    2. The dataset pipeline includes ignore_errors() which handles any
+       corrupted images that pass header validation during training
     
     Args:
         filepath: Path to the file to validate
+        mode: Validation mode - 'header' (fast) or 'full' (comprehensive)
         
     Returns:
         Tuple of (is_valid, reason) where:
-        - is_valid: True if image can be decoded successfully
+        - is_valid: True if image passes validation
         - reason: Description of why the image was rejected (empty string if valid)
     """
-    # Fast preliminary check using magic bytes
-    if not has_valid_image_header(filepath):
-        return False, "invalid or missing image header"
+    # Fast header-based validation
+    is_valid, reason = has_valid_image_header(filepath)
+    if not is_valid:
+        return False, reason
     
-    # Full TensorFlow-based validation by attempting to decode the image
+    # If header-only mode, we're done
+    if mode == 'header':
+        return True, ""
+    
+    # Full TensorFlow-based validation (slower but more thorough)
     try:
         img_bytes = tf.io.read_file(filepath)
         # Use decode_image which handles JPEG, PNG, GIF, BMP
@@ -591,7 +606,9 @@ def create_dataset_from_paths(
     # crashing if any edge cases slip through the validation.
     dataset = dataset.ignore_errors(log_warning=True)
     
-    # Batch and optimize
+    # Batch first, then cache for memory efficiency
+    # Caching after batching stores batched tensors which uses less memory
+    # than caching individual samples when shuffle is enabled
     dataset = dataset.batch(batch_size)
     dataset = dataset.cache()
     dataset = dataset.prefetch(buffer_size=tf.data.AUTOTUNE)
@@ -663,7 +680,11 @@ def create_datasets(dataset_path: str = '.', batch_size: int = BATCH_SIZE, seed:
         val_split_pct = int((1 - TRAIN_VAL_SPLIT_RATIO) * 100)
         print(f"\n  No validation directory found, splitting from train ({val_split_pct}%)...")
         
-        # Shuffle data before splitting to ensure random split
+        # Convert to numpy arrays for efficient indexing
+        train_paths_arr = np.array(train_paths)
+        train_labels_arr = np.array(train_labels)
+        
+        # Shuffle indices before splitting to ensure random split
         np.random.seed(seed)
         indices = np.random.permutation(len(train_paths))
         split_idx = int(len(indices) * TRAIN_VAL_SPLIT_RATIO)
@@ -671,15 +692,15 @@ def create_datasets(dataset_path: str = '.', batch_size: int = BATCH_SIZE, seed:
         train_indices = indices[:split_idx]
         val_indices = indices[split_idx:]
         
-        train_paths_split = [train_paths[i] for i in train_indices]
-        train_labels_split = [train_labels[i] for i in train_indices]
-        val_paths_split = [train_paths[i] for i in val_indices]
-        val_labels_split = [train_labels[i] for i in val_indices]
+        # Use numpy array indexing (much faster than list comprehension)
+        train_paths_split = train_paths_arr[train_indices].tolist()
+        train_labels_split = train_labels_arr[train_indices].tolist()
+        val_paths_split = train_paths_arr[val_indices].tolist()
+        val_labels_split = train_labels_arr[val_indices].tolist()
         
-        # Update train_class_counts to reflect the split
-        train_class_counts = {name: 0 for name in class_names}
-        for lbl in train_labels_split:
-            train_class_counts[class_names[lbl]] += 1
+        # Update train_class_counts using numpy's bincount for efficiency
+        label_counts = np.bincount(train_labels_arr[train_indices], minlength=num_classes)
+        train_class_counts = {name: int(label_counts[i]) for i, name in enumerate(class_names)}
         
         # Create training dataset
         train_ds = create_dataset_from_paths(
@@ -1063,16 +1084,18 @@ def compute_comprehensive_metrics(
     cm = confusion_matrix(y_true, y_pred)
     metrics.confusion_matrix = cm
     
-    # Specificity (True Negative Rate) per class
-    specificities = []
-    for i in range(num_classes):
-        # For class i: TN = sum of all entries except row i and column i
-        # FP = sum of column i except diagonal
-        tn = np.sum(cm) - np.sum(cm[i, :]) - np.sum(cm[:, i]) + cm[i, i]
-        fp = np.sum(cm[:, i]) - cm[i, i]
-        specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
-        specificities.append(specificity)
-    metrics.per_class_specificity = np.array(specificities)
+    # Specificity (True Negative Rate) per class - vectorized computation
+    cm_sum = np.sum(cm)
+    row_sums = np.sum(cm, axis=1)
+    col_sums = np.sum(cm, axis=0)
+    diag = np.diag(cm)
+    
+    # TN[i] = total - row_sum[i] - col_sum[i] + cm[i,i]
+    # FP[i] = col_sum[i] - cm[i,i]
+    tn = cm_sum - row_sums - col_sums + diag
+    fp = col_sums - diag
+    specificities = np.where((tn + fp) > 0, tn / (tn + fp), 0)
+    metrics.per_class_specificity = specificities
     metrics.specificity_macro = np.mean(specificities)
     
     # Cohen's Kappa
@@ -1084,10 +1107,11 @@ def compute_comprehensive_metrics(
     # Log Loss
     metrics.log_loss_value = log_loss(y_true, y_pred_proba)
     
+    # Binarize labels once for both ROC-AUC and PR-AUC computations
+    y_true_bin = label_binarize(y_true, classes=range(num_classes))
+    
     # ROC-AUC per class and averages
     try:
-        y_true_bin = label_binarize(y_true, classes=range(num_classes))
-        
         # Per-class ROC-AUC
         per_class_roc_auc = []
         for i in range(num_classes):
@@ -1111,9 +1135,8 @@ def compute_comprehensive_metrics(
         metrics.roc_auc_macro = 0.0
         metrics.roc_auc_micro = 0.0
     
-    # PR-AUC per class
+    # PR-AUC per class (reuse y_true_bin from above)
     try:
-        y_true_bin = label_binarize(y_true, classes=range(num_classes))
         per_class_pr_auc = []
         for i in range(num_classes):
             if len(np.unique(y_true_bin[:, i])) > 1:
