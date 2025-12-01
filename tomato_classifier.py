@@ -356,9 +356,8 @@ def filter_corrupt_images(dataset_path: str) -> int:
         (b'\xff\xd8\xff', 'jpeg'),           # JPEG
         (b'\x89PNG\r\n\x1a\n', 'png'),       # PNG
         (b'GIF87a', 'gif'),                   # GIF87a
-        (b'GIF89a', 'gif'),                   # GIF89a
+        (b'GIF89a', 'gif',),                  # GIF89a
         (b'BM', 'bmp'),                       # BMP
-        (b'RIFF', 'webp'),                    # WebP (RIFF container)
     ]
     
     # Mapping of extensions to expected formats
@@ -378,12 +377,16 @@ def filter_corrupt_images(dataset_path: str) -> int:
                 
             if len(header) < 2:
                 return None
+            
+            # Check for WebP: RIFF....WEBP format
+            if header[:4] == b'RIFF' and len(header) >= 12 and header[8:12] == b'WEBP':
+                return 'webp'
                 
             for signature, format_name in image_signatures:
                 if header.startswith(signature):
                     return format_name
             return None
-        except (IOError, OSError):
+        except (IOError, OSError, PermissionError):
             return None
     
     for split in ['train', 'val', 'test']:
