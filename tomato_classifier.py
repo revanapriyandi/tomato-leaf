@@ -1,14 +1,5 @@
 """
 Sistem Klasifikasi Penyakit Daun Tomat - DenseNet121
-Complete Implementation with Thesis-Ready Metrics and Visualizations
-Optimized for Kaggle GPU (Tesla P100/T4) - 100% Compatible
-
-Features:
-- Comprehensive metrics: ROC-AUC, PR-AUC, Cohen's Kappa, MCC, Balanced Accuracy, etc.
-- Complete visualizations: ROC curves, PR curves, confusion matrices, radar charts, etc.
-- Optimized training: AdamW, label smoothing, class weights, mixed precision
-- Multi-dataset evaluation: Train, Validation, Test with comparison
-- Kaggle-compatible with graceful fallbacks
 """
 
 import os
