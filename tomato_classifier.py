@@ -103,22 +103,38 @@ DEFAULT_CONFIG = {
 @keras.saving.register_keras_serializable(package="TomatoClassifier")
 class ClipLayer(layers.Layer):
     """Custom layer to clip values to 0-255 range.
-    
+
     This layer is used instead of a Lambda layer to ensure proper
     model serialization and deserialization without requiring unsafe mode.
     """
     def call(self, inputs):
+        """Clip input values to the 0-255 range.
+
+        Args:
+            inputs: Input tensor with values that may be outside 0-255.
+
+        Returns:
+            Tensor with values clipped to 0-255 range.
+        """
         return keras.ops.clip(inputs, 0, 255)
 
 
 @keras.saving.register_keras_serializable(package="TomatoClassifier")
 class DenseNetPreprocessLayer(layers.Layer):
     """Custom layer for DenseNet preprocessing.
-    
+
     This layer is used instead of a Lambda layer to ensure proper
     model serialization and deserialization without requiring unsafe mode.
     """
     def call(self, inputs):
+        """Apply DenseNet-specific preprocessing to input tensor.
+
+        Args:
+            inputs: Input tensor in RGB format with values in 0-255 range.
+
+        Returns:
+            Preprocessed tensor suitable for DenseNet model input.
+        """
         return keras.applications.densenet.preprocess_input(inputs)
 
 
